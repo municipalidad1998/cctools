@@ -10,6 +10,7 @@ import okhttp3.Cache
 import okhttp3.OkHttpClient
 import org.jsoup.nodes.Document
 import retrofit2.Retrofit
+import retrofit2.http.GET
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -129,6 +130,6 @@ object DoramasYtProvider : Provider {
     }
 
     override suspend fun getVideo(server: Video.Server): Video = Extractor.extract(server.id, server)
-    override suspend fun getGenre(id: String, page: Int): Genre = Genre(id = id, name = id, shows = search(id, page))
+    override suspend fun getGenre(id: String, page: Int): Genre = Genre(id = id, name = id, shows = search(id, page).filterIsInstance<Show>())
     override suspend fun getPeople(id: String, page: Int): People = throw Exception("Not implemented")
 }

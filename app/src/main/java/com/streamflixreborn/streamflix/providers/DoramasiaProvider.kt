@@ -19,8 +19,11 @@ import org.jsoup.nodes.Document
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
+import retrofit2.http.Headers
+import retrofit2.http.POST
 import retrofit2.http.Url
 import java.io.File
+import java.net.URL
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -31,6 +34,13 @@ object DoramasiaProvider : Provider {
     override val logo = "https://doramasia.com/favicon.ico"
 
     private val client = getOkHttpClient()
+    private val service = Retrofit.Builder()
+        .baseUrl("https://sv1.fluxcedene.net/api/") // Re-using API if found in original
+        .addConverterFactory(GsonConverterFactory.create(Gson()))
+        .client(client)
+        .build()
+        .create(DoramasiaApiService::class.java)
+
     private val serviceHtml = Retrofit.Builder()
         .baseUrl(baseUrl)
         .addConverterFactory(JsoupConverterFactory.create())
@@ -48,6 +58,11 @@ object DoramasiaProvider : Provider {
             .build()
     }
 
+    private interface DoramasiaApiService {
+        @POST("gql")
+        suspend fun getApiResponse(@retrofit2.http.Body body: okhttp3.RequestBody): Any
+    }
+
     private interface DoramasiaService {
         @GET
         suspend fun getPage(@Url url: String): Document
@@ -61,29 +76,17 @@ object DoramasiaProvider : Provider {
     override suspend fun getHome(): List<Category> {
         return try {
             val document = serviceHtml.getPage(baseUrl)
-            val script = document.selectFirst("script#__NEXT_DATA__")?.data() 
-                ?: document.select("script").firstOrNull { it.data().contains("props") }?.data()
-                ?: return emptyList()
-
-            val jsonObject = JsonParser.parseString(script).asJsonObject
-            val props = jsonObject.getAsJsonObject("props")
-            val pageProps = props.getAsJsonObject("pageProps")
-            val apolloState = pageProps.getAsJsonObject("apolloState")
-
-            // This is a simplified extraction based on the discovered JSON structure
-            val categories = mutableListOf<Category>()
+            val results = mutableListOf<TvShow>()
             
-            // Logic to extract categories from apolloState
-            apolloState.entrySet().forEach { entry ->
-                if (entry.key.contains("Label:")) {
-                    val label = entry.value.asJsonObject
-                    val name = label.get("name").asString
-                    val slug = label.get("slug").asString
-                    categories.add(Category(name = name, list = emptyList())) // List would be fetched via search/genre
+            document.select("h2 a, h3 a").forEach { element ->
+                val title = element.text()
+                val href = element.attr("href")
+                if (href.isNotEmpty()) {
+                    results.add(TvShow(id = href, title = title, poster = ""))
                 }
             }
-
-            categories
+            
+            listOf(Category(name = "Recientes", list = results))
         } catch (e: Exception) {
             emptyList()
         }
@@ -95,19 +98,14 @@ object DoramasiaProvider : Provider {
             val document = serviceHtml.getPage(url)
             val results = mutableListOf<AppAdapter.Item>()
             
-            // Fallback to CSS selectors if JSON parsing is too complex for search
-            document.select("a[href*='/dorama/'], a[href*='/pelicula/']").forEach { element ->
+            document.select("article h2 a, .entry-title a").forEach { element ->
                 val title = element.text()
                 val href = element.attr("href")
-                val poster = element.selectFirst("img")?.attr("src") ?: ""
+                val img = element.parent()?.selectFirst("img")?.attr("src") ?: ""
                 
-                if (href.contains("/dorama/")) {
-                    results.add(TvShow(id = href.removePrefix("/"), title = title, poster = getPosterUrl(poster)))
-                } else {
-                    results.add(Movie(id = href.removePrefix("/"), title = title, poster = getPosterUrl(poster)))
-                }
+                results.add(TvShow(id = href, title = title, poster = getPosterUrl(img)))
             }
-            results.distinctBy { it.toString() }
+            results
         } catch (e: Exception) {
             emptyList()
         }
@@ -124,19 +122,27 @@ object DoramasiaProvider : Provider {
     override suspend fun getMovie(id: String): Movie {
         val url = if (id.startsWith("http")) id else "$baseUrl/$id"
         val document = serviceHtml.getPage(url)
-        val title = document.title()
-        return Movie(id = id, title = title, overview = "Descripción no disponible", poster = "")
+        return Movie(id = id, title = document.title(), overview = "Descripción no disponible", poster = "")
     }
 
     override suspend fun getTvShow(id: String): TvShow {
         val url = if (id.startsWith("http")) id else "$baseUrl/$id"
         val document = serviceHtml.getPage(url)
-        val title = document.title()
-        return TvShow(id = id, title = title, overview = "Descripción no disponible", poster = "")
+        return TvShow(id = id, title = document.title(), overview = "Descripción no disponible", poster = "")
     }
 
     override suspend fun getEpisodesBySeason(seasonId: String): List<Episode> {
-        return emptyList()
+        return try {
+            val document = serviceHtml.getPage(seasonId)
+            val episodes = mutableListOf<Episode>()
+            
+            document.select("a[href*='episodio'], a[href*='episode']").forEach { element ->
+                episodes.add(Episode(id = element.attr("href"), number = 0, title = element.text(), poster = ""))
+            }
+            episodes
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     override suspend fun getServers(id: String, videoType: Video.Type): List<Video.Server> {
@@ -145,10 +151,11 @@ object DoramasiaProvider : Provider {
             val document = serviceHtml.getPage(url)
             val servers = mutableListOf<Video.Server>()
             
-            document.select("a[href*='embed'], a[href*='player']").forEach { element ->
-                val link = element.attr("href")
-                val name = element.text().ifBlank { "Server" }
-                servers.add(Video.Server(id = link, name = name))
+            document.select("iframe").forEach { element ->
+                val src = element.attr("src")
+                if (src.isNotEmpty()) {
+                    servers.add(Video.Server(id = src, name = "Server"))
+                }
             }
             servers
         } catch (e: Exception) {
@@ -159,7 +166,7 @@ object DoramasiaProvider : Provider {
     override suspend fun getVideo(server: Video.Server): Video = Extractor.extract(server.id, server)
 
     override suspend fun getGenre(id: String, page: Int): Genre {
-        return Genre(id = id, name = id, shows = search(id, page))
+        return Genre(id = id, name = id, shows = search(id, page).filterIsInstance<Show>())
     }
 
     override suspend fun getPeople(id: String, page: Int): People = throw Exception("Not implemented")
