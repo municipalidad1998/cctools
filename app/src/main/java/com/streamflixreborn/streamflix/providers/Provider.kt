@@ -58,7 +58,9 @@ interface Provider {
         )
 
         val providers = mapOf(
-            SflixProvider to ProviderSupport(movies = true, tvShows = true),
+            DoramasYtProvider to ProviderSupport(movies = true, tvShows = true),
+            DoramaExpressProvider to ProviderSupport(movies = true, tvShows = true),
+            DoramasiaProvider to ProviderSupport(movies = true, tvShows = true),
             SerienStreamProvider to ProviderSupport(movies = false, tvShows = true),
             StreamingCommunityProvider("it") to ProviderSupport(movies = true, tvShows = true),
             StreamingCommunityProvider("en") to ProviderSupport(movies = true, tvShows = true),
