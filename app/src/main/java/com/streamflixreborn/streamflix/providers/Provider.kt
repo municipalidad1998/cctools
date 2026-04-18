@@ -101,7 +101,17 @@ interface Provider {
             FrembedProvider to ProviderSupport(movies = true, tvShows = true),
             AfterDarkProvider to ProviderSupport(movies = true, tvShows = true),
             KidrazProvider to ProviderSupport(movies = true, tvShows = false),
-            FrenchMangaProvider to ProviderSupport(movies = false, tvShows = true)
+            FrenchMangaProvider to ProviderSupport(movies = false, tvShows = true),
+            DoramasYtProvider to ProviderSupport(movies = true, tvShows = true),
+            DoramaExpressProvider to ProviderSupport(movies = true, tvShows = true),
+            DoramasMp4Provider to ProviderSupport(movies = true, tvShows = true),
+            HiTvProvider to ProviderSupport(movies = true, tvShows = true),
+            DoramasiaProvider to ProviderSupport(movies = false, tvShows = true),
+            YoukuProvider to ProviderSupport(movies = true, tvShows = true),
+            PanDramaProvider to ProviderSupport(movies = true, tvShows = true),
+            GnulaProvider to ProviderSupport(movies = true, tvShows = true),
+            BetaSeriesProvider to ProviderSupport(movies = true, tvShows = true),
+            PelisflixProvider to ProviderSupport(movies = true, tvShows = true)
         )
 
         // Helper functions to check support
