@@ -18,6 +18,7 @@ import okhttp3.dnsoverhttps.DnsOverHttps
 import org.jsoup.nodes.Document
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Headers
 import retrofit2.http.POST
@@ -34,13 +35,6 @@ object DoramasiaProvider : Provider {
     override val logo = "https://doramasia.com/favicon.ico"
 
     private val client = getOkHttpClient()
-    private val service = Retrofit.Builder()
-        .baseUrl("https://sv1.fluxcedene.net/api/") // Re-using API if found in original
-        .addConverterFactory(GsonConverterFactory.create(Gson()))
-        .client(client)
-        .build()
-        .create(DoramasiaApiService::class.java)
-
     private val serviceHtml = Retrofit.Builder()
         .baseUrl(baseUrl)
         .addConverterFactory(JsoupConverterFactory.create())
@@ -55,12 +49,15 @@ object DoramasiaProvider : Provider {
             .readTimeout(30, TimeUnit.SECONDS)
             .connectTimeout(30, TimeUnit.SECONDS)
             .dns(DnsResolver.doh)
+            .addInterceptor { chain ->
+                val request = chain.request().newBuilder()
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+                    .header("Accept-Language", "es-ES,es;q=0.9")
+                    .build()
+                chain.proceed(request)
+            }
             .build()
-    }
-
-    private interface DoramasiaApiService {
-        @POST("gql")
-        suspend fun getApiResponse(@retrofit2.http.Body body: okhttp3.RequestBody): Any
     }
 
     private interface DoramasiaService {
@@ -76,17 +73,31 @@ object DoramasiaProvider : Provider {
     override suspend fun getHome(): List<Category> {
         return try {
             val document = serviceHtml.getPage(baseUrl)
-            val results = mutableListOf<TvShow>()
+            val featuredShows = mutableListOf<TvShow>()
             
-            document.select("h2 a, h3 a").forEach { element ->
-                val title = element.text()
+            // Extract from carousel/sliders
+            document.select("[class*='swiper'], [class*='carousel'], [class*='slider'] a").forEach { element ->
+                val title = element.attr("title").ifBlank { element.text() }
                 val href = element.attr("href")
-                if (href.isNotEmpty()) {
-                    results.add(TvShow(id = href, title = title, poster = ""))
+                val img = element.selectFirst("img")?.attr("src") ?: element.selectFirst("img")?.attr("data-src") ?: ""
+                
+                if (href.isNotBlank() && title.isNotBlank()) {
+                    featuredShows.add(TvShow(id = href, title = title, poster = getPosterUrl(img)))
                 }
             }
             
-            listOf(Category(name = "Recientes", list = results))
+            // Extract from grid items
+            document.select("[class*='card'], [class*='grid'], [class*='item'] a").forEach { element ->
+                val title = element.attr("title").ifBlank { element.text() }
+                val href = element.attr("href")
+                val img = element.selectFirst("img")?.attr("src") ?: element.selectFirst("img")?.attr("data-src") ?: ""
+                
+                if (href.isNotBlank() && title.isNotBlank() && !featuredShows.any { it.id == href }) {
+                    featuredShows.add(TvShow(id = href, title = title, poster = getPosterUrl(img)))
+                }
+            }
+            
+            listOf(Category(name = "Destacados", list = featuredShows.distinctBy { it.id }))
         } catch (e: Exception) {
             emptyList()
         }
@@ -94,41 +105,54 @@ object DoramasiaProvider : Provider {
 
     override suspend fun search(query: String, page: Int): List<AppAdapter.Item> {
         return try {
-            val url = "$baseUrl/?s=$query"
+            val url = "$baseUrl/?s=${query.replace(" ", "+")}"
             val document = serviceHtml.getPage(url)
             val results = mutableListOf<AppAdapter.Item>()
             
-            document.select("article h2 a, .entry-title a").forEach { element ->
-                val title = element.text()
-                val href = element.attr("href")
-                val img = element.parent()?.selectFirst("img")?.attr("src") ?: ""
+            // Search results extraction
+            document.select("article, [class*='result'], [class*='item']").forEach { article ->
+                val link = article.selectFirst("a")?.attr("href") ?: ""
+                val title = article.selectFirst("h2, h3, [class*='title']")?.text() ?: ""
+                val img = article.selectFirst("img")?.attr("src") ?: 
+                         article.selectFirst("img")?.attr("data-src") ?: ""
                 
-                results.add(TvShow(id = href, title = title, poster = getPosterUrl(img)))
+                if (link.isNotBlank() && title.isNotBlank()) {
+                    results.add(TvShow(id = link, title = title, poster = getPosterUrl(img)))
+                }
             }
-            results
+            
+            results.distinctBy { it.toString() }
         } catch (e: Exception) {
             emptyList()
         }
     }
 
     override suspend fun getMovies(page: Int): List<Movie> {
-        return search("peliculas", page).filterIsInstance<Movie>()
+        return search("pelicula", page).filterIsInstance<Movie>()
     }
 
     override suspend fun getTvShows(page: Int): List<TvShow> {
-        return search("doramas", page).filterIsInstance<TvShow>()
+        return search("dorama", page).filterIsInstance<TvShow>()
     }
 
     override suspend fun getMovie(id: String): Movie {
         val url = if (id.startsWith("http")) id else "$baseUrl/$id"
         val document = serviceHtml.getPage(url)
-        return Movie(id = id, title = document.title(), overview = "Descripción no disponible", poster = "")
+        val title = document.selectFirst("h1, [class*='title']")?.text() ?: document.title()
+        val overview = document.selectFirst("[class*='sinopsis'], [class*='description']")?.text() ?: ""
+        val poster = document.selectFirst("[class*='poster'] img, .poster img")?.attr("src") ?: ""
+        
+        return Movie(id = id, title = title, overview = overview, poster = getPosterUrl(poster))
     }
 
     override suspend fun getTvShow(id: String): TvShow {
         val url = if (id.startsWith("http")) id else "$baseUrl/$id"
         val document = serviceHtml.getPage(url)
-        return TvShow(id = id, title = document.title(), overview = "Descripción no disponible", poster = "")
+        val title = document.selectFirst("h1, [class*='title']")?.text() ?: document.title()
+        val overview = document.selectFirst("[class*='sinopsis'], [class*='description']")?.text() ?: ""
+        val poster = document.selectFirst("[class*='poster'] img, .poster img")?.attr("src") ?: ""
+        
+        return TvShow(id = id, title = title, overview = overview, poster = getPosterUrl(poster))
     }
 
     override suspend fun getEpisodesBySeason(seasonId: String): List<Episode> {
@@ -136,8 +160,13 @@ object DoramasiaProvider : Provider {
             val document = serviceHtml.getPage(seasonId)
             val episodes = mutableListOf<Episode>()
             
-            document.select("a[href*='episodio'], a[href*='episode']").forEach { element ->
-                episodes.add(Episode(id = element.attr("href"), number = 0, title = element.text(), poster = ""))
+            document.select("[class*='episode'], [class*='capitulo']").forEach { episodeElement ->
+                val link = episodeElement.selectFirst("a")?.attr("href") ?: ""
+                val title = episodeElement.selectFirst("[class*='title']")?.text() ?: "Episodio"
+                val number = title.filter { it.isDigit() }.toIntOrNull() ?: 0
+                val img = episodeElement.selectFirst("img")?.attr("src") ?: ""
+                
+                episodes.add(Episode(id = link, number = number, title = title, poster = getPosterUrl(img)))
             }
             episodes
         } catch (e: Exception) {
@@ -151,13 +180,24 @@ object DoramasiaProvider : Provider {
             val document = serviceHtml.getPage(url)
             val servers = mutableListOf<Video.Server>()
             
-            document.select("iframe").forEach { element ->
-                val src = element.attr("src")
-                if (src.isNotEmpty()) {
-                    servers.add(Video.Server(id = src, name = "Server"))
+            // Extract iframes
+            document.select("iframe").forEach { iframe ->
+                val src = iframe.attr("src")
+                if (src.isNotBlank()) {
+                    servers.add(Video.Server(id = src, name = "Video Server"))
                 }
             }
-            servers
+            
+            // Extract video player links
+            document.select("[class*='player'], [class*='video'] a").forEach { link ->
+                val href = link.attr("href")
+                val name = link.text().ifBlank { "Server ${servers.size + 1}" }
+                if (href.isNotBlank() && href.contains("embed")) {
+                    servers.add(Video.Server(id = href, name = name))
+                }
+            }
+            
+            servers.distinctBy { it.id }
         } catch (e: Exception) {
             emptyList()
         }
@@ -166,7 +206,8 @@ object DoramasiaProvider : Provider {
     override suspend fun getVideo(server: Video.Server): Video = Extractor.extract(server.id, server)
 
     override suspend fun getGenre(id: String, page: Int): Genre {
-        return Genre(id = id, name = id, shows = search(id, page).filterIsInstance<Show>())
+        return Genre(id = id, name = id.replace("-", " ").capitalize(), 
+                   shows = search(id, page).filterIsInstance<Show>())
     }
 
     override suspend fun getPeople(id: String, page: Int): People = throw Exception("Not implemented")
