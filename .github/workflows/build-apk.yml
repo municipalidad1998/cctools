@@ -27,4 +27,4 @@ jobs:
           eas-token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Build APK (Preview)
-        run: npx eas-build -p android --profile preview --non-interactive
+        run: npx eas-cli build -p android --profile preview --non-interactive
