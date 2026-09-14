@@ -117,7 +117,8 @@ jobs:
                   with: {name: LocalMix-debug-apk, path: music-player/app/build/outputs/apk/debug/*.apk}
           EOF
           cd music-player
-          gradle wrapper --gradle-version 8.13
+          gradle wrapper --gradle-version 9.5
+          ./gradlew :app:assembleDebug --no-daemon
           cd ..
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
