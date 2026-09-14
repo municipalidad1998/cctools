@@ -1,0 +1,126 @@
+name: Rebuild clean LocalMix
+on:
+  push:
+    paths: ['.github/workflows/rebuild-clean.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replace repository with clean LocalMix project
+        shell: bash
+        run: |
+          set -e
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          mkdir -p music-player/app/src/main/java/com/municipalidad/localmix music-player/app/src/main/res/values .github/workflows
+          cat > settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name='LocalMixPlayer'
+          include ':app'
+          EOF
+          cat > build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.13.2' apply false }
+          EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+          cat > music-player/settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name='LocalMixPlayer'
+          include ':app'
+          EOF
+          cat > music-player/build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.13.2' apply false }
+          EOF
+          cat > music-player/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+          cat > music-player/app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android { namespace 'com.municipalidad.localmix'; compileSdk 36
+            defaultConfig { applicationId 'com.municipalidad.localmix'; minSdk 26; targetSdk 35; versionCode 1; versionName '1.0.0' }
+            compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+          }
+          dependencies {
+            implementation 'androidx.core:core-ktx:1.17.0'
+            implementation 'androidx.appcompat:appcompat:1.7.1'
+            implementation 'com.google.android.material:material:1.13.0'
+            implementation 'androidx.media3:media3-exoplayer:1.8.0'
+            implementation 'androidx.media3:media3-common:1.8.0'
+          }
+          EOF
+          cat > music-player/app/src/main/res/values/styles.xml <<'EOF'
+          <resources><style name="Theme.LocalMix" parent="Theme.Material3.DayNight.NoActionBar"><item name="android:navigationBarColor">@android:color/black</item><item name="android:statusBarColor">@android:color/black</item></style></resources>
+          EOF
+          cat > music-player/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+            <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+            <application android:theme="@style/Theme.LocalMix" android:label="LocalMix">
+              <activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity>
+            </application>
+          </manifest>
+          EOF
+          cat > music-player/app/src/main/java/com/municipalidad/localmix/Track.java <<'EOF'
+          package com.municipalidad.localmix;
+          public class Track { public long id,duration; public String title,artist,album,uri; public Track(long i,String t,String a,String al,long d,String u){id=i;title=t;artist=a;album=al;duration=d;uri=u;} }
+          EOF
+          cat > music-player/app/src/main/java/com/municipalidad/localmix/Library.java <<'EOF'
+          package com.municipalidad.localmix;
+          import android.content.*;import android.database.*;import android.provider.MediaStore;import java.util.*;
+          public class Library { private final Context c; public Library(Context c){this.c=c;} public List<Track> scan(){List<Track> out=new ArrayList<>();String[] p={MediaStore.Audio.Media._ID,MediaStore.Audio.Media.TITLE,MediaStore.Audio.Media.ARTIST,MediaStore.Audio.Media.ALBUM,MediaStore.Audio.Media.DURATION};try(Cursor x=c.getContentResolver().query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,p,MediaStore.Audio.Media.IS_MUSIC+"!=0",null,MediaStore.Audio.Media.TITLE+" COLLATE NOCASE ASC")){if(x!=null){int i=x.getColumnIndexOrThrow(MediaStore.Audio.Media._ID),t=x.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE),a=x.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST),al=x.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM),d=x.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION);while(x.moveToNext()){long id=x.getLong(i);out.add(new Track(id,n(x.getString(t),"Sin título"),n(x.getString(a),"Artista desconocido"),n(x.getString(al),"Álbum desconocido"),x.getLong(d),ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,id).toString()));}}}catch(Exception ignored){}return out;}private String n(String s,String f){return s==null||s.isEmpty()?f:s;} }
+          EOF
+          cat > music-player/app/src/main/java/com/municipalidad/localmix/MainActivity.java <<'EOF'
+          package com.municipalidad.localmix;
+          import android.Manifest;import android.app.*;import android.os.*;import android.content.pm.PackageManager;import android.graphics.Color;import android.widget.*;import androidx.media3.common.*;import androidx.media3.exoplayer.*;import java.util.*;
+          public class MainActivity extends Activity{
+            LinearLayout list;EditText search;TextView now;Library lib;List<Track> tracks=new ArrayList<>(),queue=new ArrayList<>();ExoPlayer a,b,active;Handler h=new Handler(Looper.getMainLooper());int qi=-1;long fade=7000;Set<String> playlist=new LinkedHashSet<>();
+            public void onCreate(Bundle x){super.onCreate(x);lib=new Library(this);a=new ExoPlayer.Builder(this).build();b=new ExoPlayer.Builder(this).build();a.setSkipSilenceEnabled(true);b.setSkipSilenceEnabled(true);a.addListener(listener(a));b.addListener(listener(b));ui();if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.READ_MEDIA_AUDIO},9);else load();}
+            Player.Listener listener(ExoPlayer p){return new Player.Listener(){public void onPlaybackStateChanged(int s){if(s==Player.STATE_ENDED&&p==active)next();}};}
+            void ui(){LinearLayout r=new LinearLayout(this);r.setOrientation(LinearLayout.VERTICAL);r.setPadding(20,18,20,8);TextView t=new TextView(this);t.setText("LocalMix");t.setTextSize(30);t.setTextColor(Color.WHITE);r.addView(t);search=new EditText(this);search.setHint("Buscar canciones, artistas o álbumes");r.addView(search);LinearLayout n=new LinearLayout(this);for(String s:new String[]{"Inicio","Biblioteca","Listas +"}){Button q=new Button(this);q.setText(s);n.addView(q,new LinearLayout.LayoutParams(0,-2,1));if(s.equals("Inicio"))q.setOnClickListener(v->render(filter()));else if(s.equals("Biblioteca"))q.setOnClickListener(v->render(tracks));else q.setOnClickListener(v->playlistDialog());}r.addView(n);now=new TextView(this);now.setText("Nada reproduciendo");now.setPadding(12,18,12,18);r.addView(now);ScrollView sc=new ScrollView(this);list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);sc.addView(list);r.addView(sc,new LinearLayout.LayoutParams(-1,0,1));setContentView(r);search.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int b,int c){}public void onTextChanged(CharSequence s,int a,int b,int c){render(filter());}public void afterTextChanged(android.text.Editable e){}});}
+            void load(){tracks=lib.scan();queue=new ArrayList<>(tracks);render(tracks);}
+            List<Track> filter(){String q=search.getText().toString().toLowerCase();List<Track> r=new ArrayList<>();for(Track t:tracks)if((t.title+" "+t.artist+" "+t.album).toLowerCase().contains(q))r.add(t);return r;}
+            void render(List<Track> xs){list.removeAllViews();for(Track t:xs){TextView v=new TextView(this);v.setText(t.title+"\n"+t.artist+" • "+t.album);v.setTextSize(17);v.setPadding(4,16,4,16);v.setOnClickListener(z->{queue=new ArrayList<>(xs);qi=queue.indexOf(t);play(t);});v.setOnLongClickListener(z->{playlist.add(t.uri);Toast.makeText(this,"Añadida a la lista local",Toast.LENGTH_SHORT).show();return true;});list.addView(v);}}
+            void play(Track t){ExoPlayer p=active==a?b:a;p.stop();p.clearMediaItems();p.setMediaItem(MediaItem.fromUri(t.uri));p.prepare();p.setVolume(0f);p.play();ExoPlayer old=active;active=p;now.setText("▶ "+t.title+" — "+t.artist);if(old!=null)fade(old,p);else p.setVolume(1f);}
+            void next(){if(queue.isEmpty())return;qi=(qi+1)%queue.size();Track n=queue.get(qi);play(n);}
+            void fade(ExoPlayer old,ExoPlayer in){final long st=SystemClock.uptimeMillis();Runnable r=new Runnable(){public void run(){float z=Math.min(1f,(SystemClock.uptimeMillis()-st)/(float)fade);old.setVolume(1-z);in.setVolume(z);if(z<1)h.postDelayed(this,60);else{old.stop();old.setVolume(1);}}};h.post(r);}
+            void playlistDialog(){new AlertDialog.Builder(this).setTitle("Lista local").setMessage("Mantén pulsada una canción para añadirla.\nGuardadas: "+playlist.size()).setPositiveButton("OK",null).show();}
+            protected void onDestroy(){h.removeCallbacksAndMessages(null);a.release();b.release();super.onDestroy();}
+          }
+          EOF
+          cat > .github/workflows/build-apk.yml <<'EOF'
+          name: LocalMix APK
+          on:
+            workflow_dispatch:
+            push:
+              paths: ['music-player/**','settings.gradle','build.gradle']
+          permissions: {contents: read}
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                - uses: actions/setup-java@v4
+                  with: {distribution: temurin, java-version: '17'}
+                - uses: gradle/actions/setup-gradle@v4
+                - name: Build APK
+                  working-directory: music-player
+                  run: gradle :app:assembleDebug --no-daemon
+                - uses: actions/upload-artifact@v4
+                  with: {name: LocalMix-debug-apk, path: music-player/app/build/outputs/apk/debug/*.apk}
+          EOF
+          cd music-player
+          gradle wrapper --gradle-version 8.13
+          cd ..
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Replace repository with clean LocalMix player' || true
+          git push origin HEAD:main
